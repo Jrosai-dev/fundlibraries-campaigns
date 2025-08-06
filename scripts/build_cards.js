@@ -6,24 +6,55 @@ const SOURCE_URL = 'https://script.google.com/macros/s/AKfycbz45NPJ1q8tG6at1qCVm
 const OUT_DIR = path.join(__dirname, '..', 'public');
 const OUT_FILE = path.join(OUT_DIR, 'campaigns.cards.min.json');
 
-function fetchJSON(url) {
+function fetchText(url, redirects = 5) {
   return new Promise((resolve, reject) => {
-    https.get(url, res => {
+    const req = https.get(url, {
+      headers: {
+        'user-agent': 'github-actions',
+        'accept': 'application/json,text/plain;q=0.9,*/*;q=0.8',
+        'accept-encoding': 'identity'
+      }
+    }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+        const next = new URL(res.headers.location, url).toString();
+        res.resume();
+        return fetchText(next, redirects - 1).then(resolve, reject);
+      }
       let data = '';
-      res.on('data', d => data += d);
+      res.setEncoding('utf8');
+      res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(e); }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`HTTP ${res.statusCode}. Preview: ${data.slice(0,300)}`));
+        }
+        resolve(data);
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
   });
+}
+
+function parsePossiblyQuotedJSON(text) {
+  // Try normal parse first
+  try { return JSON.parse(text); } catch (_) {}
+  // If it looks like " {...} " without escaping, strip outer quotes and try again
+  const t = text.trim();
+  if (t.startsWith('"') && t.endsWith('"')) {
+    const unwrapped = t.slice(1, -1);
+    try { return JSON.parse(unwrapped); } catch (_) {}
+    // If it was a properly escaped JSON string, parse twice
+    try {
+      const inner = JSON.parse(t);
+      if (typeof inner === 'string') return JSON.parse(inner);
+    } catch (_) {}
+  }
+  throw new Error('Response was not valid JSON. Preview: ' + text.slice(0, 500));
 }
 
 function splitLocation(loc) {
   if (!loc) return { city: '', state: '' };
   const parts = String(loc).split(',').map(s => s.trim());
-  if (parts.length >= 2) return { city: parts[0], state: parts[1] };
-  return { city: loc, state: '' };
+  return { city: parts[0] || '', state: parts[1] || '' };
 }
 
 function mapOne(c) {
@@ -45,18 +76,23 @@ function mapOne(c) {
 }
 
 function isPublic(c) {
-  if (!c) return false;
-  if (String(c.status || '').toLowerCase() !== 'active') return false;
-  return true;
+  return String(c.status || '').toLowerCase() === 'active';
 }
 
-(async function main(){
-  if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
-  const raw = await fetchJSON(SOURCE_URL);
-  const list = Array.isArray(raw.campaigns) ? raw.campaigns : [];
-  const cards = list.filter(isPublic).map(mapOne);
-  // newest first by updated_at if present
-  cards.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
-  fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
-  console.log('Wrote', OUT_FILE, 'items:', cards.length);
+(async function main() {
+  try {
+    const text = await fetchText(SOURCE_URL);
+    const root = parsePossiblyQuotedJSON(text);
+
+    const campaigns = Array.isArray(root.campaigns) ? root.campaigns : [];
+    const cards = campaigns.filter(isPublic).map(mapOne);
+    cards.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+
+    if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
+    fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
+    console.log('Wrote', OUT_FILE, 'items:', cards.length);
+  } catch (err) {
+    console.error('Build failed:', err.message);
+    process.exit(1);
+  }
 })();
