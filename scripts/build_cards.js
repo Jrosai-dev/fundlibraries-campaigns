@@ -1,10 +1,15 @@
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+/** EDIT if you ever change repo */
+const REPO_SLUG = 'Jrosai-dev/fundlibraries-campaigns';
+const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${REPO_SLUG}@main/public/`;
 
 const SOURCE_URL = 'https://script.google.com/macros/s/AKfycbz45NPJ1q8tG6at1qCVmoNTOk53cFhKlJNCq-tqw6W1h2bQDwbyipW0CAyrJ89c7ZSk/exec';
-const OUT_DIR = path.join(__dirname, '..', 'public');
-const OUT_FILE = path.join(OUT_DIR, 'campaigns.cards.min.json');
+const OUT_DIR    = path.join(__dirname, '..', 'public');
+const OUT_FILE   = path.join(OUT_DIR, 'campaigns.cards.min.json'); // canonical
 
 function fetchText(url, redirects = 5) {
   return new Promise((resolve, reject) => {
@@ -35,14 +40,11 @@ function fetchText(url, redirects = 5) {
 }
 
 function parsePossiblyQuotedJSON(text) {
-  // Try normal parse first
   try { return JSON.parse(text); } catch (_) {}
-  // If it looks like " {...} " without escaping, strip outer quotes and try again
   const t = text.trim();
   if (t.startsWith('"') && t.endsWith('"')) {
     const unwrapped = t.slice(1, -1);
     try { return JSON.parse(unwrapped); } catch (_) {}
-    // If it was a properly escaped JSON string, parse twice
     try {
       const inner = JSON.parse(t);
       if (typeof inner === 'string') return JSON.parse(inner);
@@ -69,7 +71,6 @@ function mapOne(c) {
     raised: Number(c.raised) || 0,
     goal: Number(c.funding_goal) || 0,
 
-    // NEW / important for Explore filters
     category: c.category || '',
     location: c.location || [city, state].filter(Boolean).join(', '),
     city,
@@ -78,7 +79,6 @@ function mapOne(c) {
     organization: c.organization || '',
     status: c.status || '',
 
-    // Dates (keep all so you can sort/filter later)
     start_date: c.start_date || '',
     end_date: c.end_date || '',
     created_at: c.created_at || '',
@@ -90,20 +90,58 @@ function isPublic(c) {
   return String(c.status || '').toLowerCase() === 'active';
 }
 
+function utcStamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return [
+    d.getUTCFullYear(),
+    pad(d.getUTCMonth() + 1),
+    pad(d.getUTCDate()),
+    pad(d.getUTCHours()),
+    pad(d.getUTCMinutes())
+  ].join('');
+}
+
 (async function main() {
   try {
     const text = await fetchText(SOURCE_URL);
     const root = parsePossiblyQuotedJSON(text);
 
-    const campaigns = Array.isArray(root.campaigns) ? root.campaigns : [];
+    const campaigns = Array.isArray(root?.campaigns) ? root.campaigns
+                      : Array.isArray(root) ? root
+                      : [];
     const cards = campaigns.filter(isPublic).map(mapOne);
     cards.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
 
     if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
+
+    // Write canonical (back-compat)
     fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
-    console.log('Wrote', OUT_FILE, 'items:', cards.length);
+
+    // Versioned filename: time + content hash
+    const stamp = utcStamp(); // e.g. 202507011122
+    const hash  = crypto.createHash('sha1').update(JSON.stringify(cards)).digest('hex').slice(0, 8);
+    const versionedName = `campaigns.cards.${stamp}.${hash}.min.json`;
+    const versionedPath = path.join(OUT_DIR, versionedName);
+
+    fs.writeFileSync(versionedPath, JSON.stringify(cards), 'utf8');
+
+    // Manifest that points to the versioned CDN URL
+    const manifest = {
+      url: CDN_BASE + versionedName,
+      stamp,
+      hash,
+      updated_at: new Date().toISOString(),
+      count: cards.length
+    };
+    fs.writeFileSync(path.join(OUT_DIR, 'cards.latest.json'), JSON.stringify(manifest), 'utf8');
+
+    console.log('Wrote:');
+    console.log('  ', OUT_FILE);
+    console.log('  ', versionedPath);
+    console.log('  ', path.join(OUT_DIR, 'cards.latest.json'));
   } catch (err) {
-    console.error('Build failed:', err.message);
+    console.error('Build failed:', err.stack || err.message);
     process.exit(1);
   }
 })();
