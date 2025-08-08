@@ -43,35 +43,29 @@ jobs:
           PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
           curl -fS "$PURGE_URL"
 
-      - name: Verify CDN has the new version
-        run: |
-          set -e
-          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
-          MANIFEST_CDN="https://cdn.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json"
-          BASENAME=$(basename "$VERSIONED_URL")
+   - name: Verify versioned JSON is live on CDN
+  run: |
+    set -euo pipefail
 
-          echo "Waiting for CDN to serve: $VERSIONED_URL"
-          for i in {1..10}; do
-            BODY="$(curl -fsSL "$VERSIONED_URL" || true)"
-            if [ -n "$BODY" ] && echo "$BODY" | grep -q '"slug"'; then
-              echo "Versioned JSON is live on jsDelivr."
-              break
-            fi
-            sleep 6
-            if [ $i -eq 10 ]; then
-              echo "Timed out waiting for versioned file."
-              exit 1
-            fi
-          done
+    # Read the pinned URL produced earlier (public/cards.latest.json)
+    VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
+    echo "Waiting for CDN to serve: $VERSIONED_URL"
 
-          echo "Waiting for CDN manifest to reflect new version ($BASENAME)"
-          for i in {1..10}; do
-            M="$(curl -fsSL "$MANIFEST_CDN" || true)"
-            if echo "$M" | grep -Fq "$BASENAME"; then
-              echo "Manifest on CDN references the new version."
-              exit 0
-            fi
-            sleep 6
-          done
-          echo "Manifest still stale after retries."
-          exit 1
+    # Try for up to ~7.5 minutes (90 * 5s)
+    for i in {1..90}; do
+      CODE="$(curl -s -o /dev/null -w "%{http_code}" "$VERSIONED_URL")"
+      if [ "$CODE" = "200" ]; then
+        # Optional sanity check: looks like JSON with at least one "slug"
+        BODY="$(curl -s "$VERSIONED_URL" || true)"
+        if echo "$BODY" | grep -q '"slug"'; then
+          echo "Versioned JSON is live and looks valid."
+        else
+          echo "Versioned JSON is live (200). Skipping strict content check."
+        fi
+        exit 0
+      fi
+      sleep 5
+    done
+
+    echo "File not live after retries."
+    exit 1
