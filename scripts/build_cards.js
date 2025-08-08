@@ -59,6 +59,7 @@ function splitLocation(loc) {
 
 function mapOne(c) {
   const { city, state } = splitLocation(c.location);
+
   return {
     id: c.slug,
     slug: c.slug,
@@ -67,11 +68,21 @@ function mapOne(c) {
     img: c.featured_image || '',
     raised: Number(c.raised) || 0,
     goal: Number(c.funding_goal) || 0,
+
+    // NEW / important for Explore filters
+    category: c.category || '',
+    location: c.location || [city, state].filter(Boolean).join(', '),
     city,
     state,
-    updated_at: c.created_at || c.end_date || '',
+
+    organization: c.organization || '',
     status: c.status || '',
-    organization: c.organization || ''
+
+    // Dates (keep all so you can sort/filter later)
+    start_date: c.start_date || '',
+    end_date: c.end_date || '',
+    created_at: c.created_at || '',
+    updated_at: c.updated_at || c.end_date || c.created_at || ''
   };
 }
 
