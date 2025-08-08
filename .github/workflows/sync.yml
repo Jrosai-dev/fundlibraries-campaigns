@@ -1,9 +1,9 @@
 name: Sync cards from Google
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
-    - cron: "0 * * * *"  # every hour
+    - cron: '0 * * * *'  # every hour
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Build cards (canonical + versioned + latest pointer)
         run: node scripts/build_cards.js
@@ -35,10 +35,9 @@ jobs:
         run: |
           set -e
           # Canonical + pointer
-          curl -fS "https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json"
-          curl -fS "https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json"
-
-          # Versioned (optional but safe)
+          curl -fS https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
+          curl -fS https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json
+          # Versioned (optional)
           VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
           PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
           curl -fS "$PURGE_URL"
@@ -48,7 +47,7 @@ jobs:
           set -e
           VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
           echo "Waiting for CDN to serve: $VERSIONED_URL"
-          for i in {1..90}; do  # up to ~7.5 minutes
+          for i in $(seq 1 90); do  # up to ~7.5 minutes
             code=$(curl -s -o /dev/null -w "%{http_code}" "$VERSIONED_URL")
             if [ "$code" = "200" ]; then
               echo "Versioned JSON is live on jsDelivr."
@@ -59,14 +58,13 @@ jobs:
           echo "File not live after retries."
           exit 1
 
-      # Optional, non-fatal check of the pointer (cards.latest.json) visibility
       - name: (Optional) Check latest pointer (non-fatal)
         continue-on-error: true
         run: |
           set -e
           LATEST_URL="https://cdn.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json?v=$(date +%s)"
           echo "Checking latest pointer: $LATEST_URL"
-          for i in {1..60}; do
+          for i in $(seq 1 60); do
             code=$(curl -s -o latest.json -w "%{http_code}" "$LATEST_URL")
             if [ "$code" = "200" ] && grep -q '"url":' latest.json; then
               echo "Latest pointer is visible."
@@ -75,30 +73,3 @@ jobs:
             sleep 5
           done
           echo "Latest pointer still stale; continuing."
-
-   - name: Verify versioned JSON is live on CDN
-  run: |
-    set -euo pipefail
-
-    # Read the pinned URL produced earlier (public/cards.latest.json)
-    VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
-    echo "Waiting for CDN to serve: $VERSIONED_URL"
-
-    # Try for up to ~7.5 minutes (90 * 5s)
-    for i in {1..90}; do
-      CODE="$(curl -s -o /dev/null -w "%{http_code}" "$VERSIONED_URL")"
-      if [ "$CODE" = "200" ]; then
-        # Optional sanity check: looks like JSON with at least one "slug"
-        BODY="$(curl -s "$VERSIONED_URL" || true)"
-        if echo "$BODY" | grep -q '"slug"'; then
-          echo "Versioned JSON is live and looks valid."
-        else
-          echo "Versioned JSON is live (200). Skipping strict content check."
-        fi
-        exit 0
-      fi
-      sleep 5
-    done
-
-    echo "File not live after retries."
-    exit 1
