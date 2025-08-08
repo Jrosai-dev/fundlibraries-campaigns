@@ -15,18 +15,63 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Build lean cards
+
+      - name: Build cards (canonical + versioned + manifest)
         run: node scripts/build_cards.js
-      - name: Commit generated file
+
+      - name: Commit generated files
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/campaigns.cards.min.json
+          git add public/campaigns.cards.min.json public/campaigns.cards.*.min.json public/cards.latest.json
           git commit -m "Update cards feed from Google" || echo "No changes"
           git push
-      - name: Purge jsDelivr cache
+
+      - name: Purge jsDelivr caches
         run: |
-          curl -s "https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json"
+          set -e
+          # Canonical + manifest
+          curl -fS "https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json"
+          curl -fS "https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json"
+
+          # Purge versioned (not strictly needed but harmless)
+          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
+          PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
+          curl -fS "$PURGE_URL"
+
+      - name: Verify CDN has the new version
+        run: |
+          set -e
+          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
+          MANIFEST_CDN="https://cdn.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json"
+          BASENAME=$(basename "$VERSIONED_URL")
+
+          echo "Waiting for CDN to serve: $VERSIONED_URL"
+          for i in {1..10}; do
+            BODY="$(curl -fsSL "$VERSIONED_URL" || true)"
+            if [ -n "$BODY" ] && echo "$BODY" | grep -q '"slug"'; then
+              echo "Versioned JSON is live on jsDelivr."
+              break
+            fi
+            sleep 6
+            if [ $i -eq 10 ]; then
+              echo "Timed out waiting for versioned file."
+              exit 1
+            fi
+          done
+
+          echo "Waiting for CDN manifest to reflect new version ($BASENAME)"
+          for i in {1..10}; do
+            M="$(curl -fsSL "$MANIFEST_CDN" || true)"
+            if echo "$M" | grep -Fq "$BASENAME"; then
+              echo "Manifest on CDN references the new version."
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "Manifest still stale after retries."
+          exit 1
