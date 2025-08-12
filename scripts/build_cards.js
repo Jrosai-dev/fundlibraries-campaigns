@@ -67,6 +67,7 @@ function mapOne(c) {
     slug: c.slug,
     title: c.title || 'Untitled',
     short: c.excerpt || '',
+    description: c.description || '',
     img: c.featured_image || '',
     raised: Number(c.raised) || 0,
     goal: Number(c.funding_goal) || 0,
