@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: cards-sync
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,34 +24,52 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build cards (canonical + versioned + latest pointer)
+      # Optional: clear old versioned folders before writing new ones
+      - name: Clean old versioned folders
+        run: rm -rf public/campaigns.v-*
+
+      - name: Build cards (canonical + versioned + index + per-slug + manifest)
         run: node scripts/build_cards.js
 
       - name: Commit generated files
         run: |
+          set -e
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/campaigns.cards.min.json public/campaigns.cards.*.min.json public/cards.latest.json
-          git commit -m "Update cards feed from Google" || echo "No changes"
+          git add public/campaigns.cards.min.json \
+                  public/campaigns.cards.*.min.json \
+                  public/cards.latest.json \
+                  public/campaigns.index.min.json \
+                  public/campaigns.manifest.json
+          # add new per-slug versioned folders
+          git add -A public/campaigns.v-*
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Update cards feed from Google"
+          git pull --rebase origin main
           git push
 
       - name: Purge jsDelivr caches
         run: |
           set -e
-          # Canonical + pointer
-          curl -fS https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
-          curl -fS https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json
-          # Versioned (optional)
+          purge() { for i in 1 2 3; do curl -fS "$1" && return 0 || sleep 2; done; return 1; }
+          # Canonical and pointers
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json
+          # New non-versioned files
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.index.min.json
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json
+          # Versioned aggregated file (derive from latest)
           VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
           PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
-          curl -fS "$PURGE_URL"
+          purge "$PURGE_URL"
+          # Per-slug files live under a new versioned folder each build, so no purge needed
 
       - name: Verify versioned file is live on CDN
         run: |
           set -e
           VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
           echo "Waiting for CDN to serve: $VERSIONED_URL"
-          for i in $(seq 1 90); do  # up to ~7.5 minutes
+          for i in $(seq 1 90); do
             code=$(curl -s -o /dev/null -w "%{http_code}" "$VERSIONED_URL")
             if [ "$code" = "200" ]; then
               echo "Versioned JSON is live on jsDelivr."
@@ -58,7 +80,7 @@ jobs:
           echo "File not live after retries."
           exit 1
 
-      - name: (Optional) Check latest pointer (non-fatal)
+      - name: Check latest pointer (non-fatal)
         continue-on-error: true
         run: |
           set -e
@@ -72,4 +94,4 @@ jobs:
             fi
             sleep 5
           done
-          echo "Latest pointer still stale; continuing."
+          echo "Latest pointer still stale. Continuing."
