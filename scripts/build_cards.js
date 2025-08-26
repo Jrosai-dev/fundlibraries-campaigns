@@ -7,9 +7,12 @@ const crypto = require('crypto');
 const REPO_SLUG = 'Jrosai-dev/fundlibraries-campaigns';
 const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${REPO_SLUG}@main/public/`;
 
-const SOURCE_URL = 'https://script.google.com/macros/s/AKfycbz45NPJ1q8tG6at1qCVmoNTOk53cFhKlJNCq-tqw6W1h2bQDwbyipW0CAyrJ89c7ZSk/exec';
-const OUT_DIR    = path.join(__dirname, '..', 'public');
-const OUT_FILE   = path.join(OUT_DIR, 'campaigns.cards.min.json'); // canonical
+/** New public JSON endpoint + explicit src=front */
+const SOURCE_URL =
+  'https://script.googleusercontent.com/macros/echo?user_content_key=AehSKLi3zb1HHQlCSeyF6ApqsVvl4cKBTM2mZDpL2xFJgTtJCGFECsWS4NOIFD2wedKwm9Z41xWof3xQSGSawrlKLT13MXkSN-5-Cs-hYmO6UtgS9NfL4rM5icEEHuGrS8Jq0nlszCFnyGD_iXcZWeS8hcSk53kAgWco4TLGnvVSNy9VO9PEQSJAypsd93HuIr9PYaYucgmJS5OL-3k4n5AgKp1mCnpFiBB1Igo-5TFeBc8nnFxvEvPTRtc0tp9c7ruPcDW0VOSh9oyV6GlC5cfQCFxa0WZyXRQuL3P9Ezg1&lib=MVMIYV6saYybDBeuj7IgiPNHZPnF7WrD1&src=front';
+
+const OUT_DIR  = path.join(__dirname, '..', 'public');
+const OUT_FILE = path.join(OUT_DIR, 'campaigns.cards.min.json'); // canonical
 
 function fetchText(url, redirects = 5) {
   return new Promise((resolve, reject) => {
@@ -59,31 +62,58 @@ function splitLocation(loc) {
   return { city: parts[0] || '', state: parts[1] || '' };
 }
 
+function numish(v) {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return v;
+  const s = String(v).replace(/[$, ]/g, '');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function cleanStr(v) {
+  if (v == null) return '';
+  const s = String(v).trim();
+  const sl = s.toLowerCase();
+  if (sl === 'undefined' || sl === 'null') return '';
+  return s;
+}
+
 function mapOne(c) {
-  const { city, state } = splitLocation(c.location);
+  // Prefer explicit city and state, else derive from location
+  const city  = cleanStr(c.city)  || splitLocation(c.location).city;
+  const state = cleanStr(c.state) || splitLocation(c.location).state;
 
+  // Prefer explicit combined location if present, else build from city and state
+  const location = cleanStr(c.location) || [city, state].filter(Boolean).join(', ');
+
+  // New headers mapping
   return {
-    id: c.slug,
-    slug: c.slug,
-    title: c.title || 'Untitled',
-    short: c.excerpt || '',
-    description: c.description || '',
-    img: c.featured_image || '',
-    raised: Number(c.raised) || 0,
-    goal: Number(c.funding_goal) || 0,
+    id: cleanStr(c.slug),
+    slug: cleanStr(c.slug),
 
-    category: c.category || '',
-    location: c.location || [city, state].filter(Boolean).join(', '),
+    title: cleanStr(c.campaign_name) || cleanStr(c.title) || 'Untitled',
+    short: cleanStr(c.short_blurb)   || cleanStr(c.excerpt),
+    description: cleanStr(c.long_description) || cleanStr(c.description),
+    img: cleanStr(c.image_url) || cleanStr(c.featured_image),
+
+    raised: numish(c.raised),
+    goal:   numish(c.goal_amount) || numish(c.funding_goal),
+
+    category: cleanStr(c.category),
+    location,
     city,
     state,
 
-    organization: c.organization || '',
-    status: c.status || '',
+    organization: cleanStr(c.org_name) || cleanStr(c.organization),
+    status: cleanStr(c.status),
 
-    start_date: c.start_date || '',
-    end_date: c.end_date || '',
-    created_at: c.created_at || '',
-    updated_at: c.updated_at || c.end_date || c.created_at || ''
+    // Dates: only end_date is guaranteed in the new sheet
+    start_date: cleanStr(c.start_date) || '',
+    end_date:   cleanStr(c.end_date)   || '',
+    created_at: cleanStr(c.created_at) || '',
+
+    // Sort key fallback
+    updated_at: cleanStr(c.updated_at) || cleanStr(c.end_date) || cleanStr(c.created_at) || ''
   };
 }
 
@@ -108,15 +138,21 @@ function utcStamp() {
     const text = await fetchText(SOURCE_URL);
     const root = parsePossiblyQuotedJSON(text);
 
-    const campaigns = Array.isArray(root?.campaigns) ? root.campaigns
-                      : Array.isArray(root) ? root
-                      : [];
+    // New API returns { front: [...] }. Keep back compat for { campaigns: [...] } or raw array.
+    const campaigns =
+      Array.isArray(root?.front)      ? root.front      :
+      Array.isArray(root?.campaigns)  ? root.campaigns  :
+      Array.isArray(root)             ? root            :
+      [];
+
     const cards = campaigns.filter(isPublic).map(mapOne);
+
+    // Sort by updated_at if present, else stable
     cards.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
 
     if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
-    // Write canonical (back-compat)
+    // Write canonical
     fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
 
     // Versioned filename: time + content hash
