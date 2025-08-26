@@ -1,15 +1,16 @@
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
+// scripts/build_cards.js
+const https  = require('https');
+const fs     = require('fs');
+const path   = require('path');
 const crypto = require('crypto');
 
 /** EDIT if you ever change repo */
 const REPO_SLUG = 'Jrosai-dev/fundlibraries-campaigns';
 const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${REPO_SLUG}@main/public/`;
 
-/** New public JSON endpoint + explicit src=front */
-const SOURCE_URL =
-  'https://script.googleusercontent.com/macros/echo?user_content_key=AehSKLi3zb1HHQlCSeyF6ApqsVvl4cKBTM2mZDpL2xFJgTtJCGFECsWS4NOIFD2wedKwm9Z41xWof3xQSGSawrlKLT13MXkSN-5-Cs-hYmO6UtgS9NfL4rM5icEEHuGrS8Jq0nlszCFnyGD_iXcZWeS8hcSk53kAgWco4TLGnvVSNy9VO9PEQSJAypsd93HuIr9PYaYucgmJS5OL-3k4n5AgKp1mCnpFiBB1Igo-5TFeBc8nnFxvEvPTRtc0tp9c7ruPcDW0VOSh9oyV6GlC5cfQCFxa0WZyXRQuL3P9Ezg1&lib=MVMIYV6saYybDBeuj7IgiPNHZPnF7WrD1&src=front';
+/** Your two web apps */
+const CAMPAIGNS_URL = 'https://script.google.com/macros/s/AKfycbyiouHm4YRuReOn73FR_uLr7wJpBTW4QhCaXb9a12x3_wuYMll9FiBPj9lPQcOFhkAfRA/exec';
+const UPDATES_URL   = 'https://script.google.com/macros/s/AKfycbw21MCIKLKDMUZmsDP0AAvnmsGwCN1TYHviqcUmArJDOW8y1LdpMFvFugXY4iWI4nUz4A/exec';
 
 const OUT_DIR  = path.join(__dirname, '..', 'public');
 const OUT_FILE = path.join(OUT_DIR, 'campaigns.cards.min.json'); // canonical
@@ -44,7 +45,7 @@ function fetchText(url, redirects = 5) {
 
 function parsePossiblyQuotedJSON(text) {
   try { return JSON.parse(text); } catch (_) {}
-  const t = text.trim();
+  const t = String(text || '').trim();
   if (t.startsWith('"') && t.endsWith('"')) {
     const unwrapped = t.slice(1, -1);
     try { return JSON.parse(unwrapped); } catch (_) {}
@@ -53,13 +54,7 @@ function parsePossiblyQuotedJSON(text) {
       if (typeof inner === 'string') return JSON.parse(inner);
     } catch (_) {}
   }
-  throw new Error('Response was not valid JSON. Preview: ' + text.slice(0, 500));
-}
-
-function splitLocation(loc) {
-  if (!loc) return { city: '', state: '' };
-  const parts = String(loc).split(',').map(s => s.trim());
-  return { city: parts[0] || '', state: parts[1] || '' };
+  throw new Error('Response was not valid JSON. Preview: ' + t.slice(0, 500));
 }
 
 function numish(v) {
@@ -69,7 +64,6 @@ function numish(v) {
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 }
-
 function cleanStr(v) {
   if (v == null) return '';
   const s = String(v).trim();
@@ -77,16 +71,26 @@ function cleanStr(v) {
   if (sl === 'undefined' || sl === 'null') return '';
   return s;
 }
+function splitLocation(loc) {
+  if (!loc) return { city: '', state: '' };
+  const parts = String(loc).split(',').map(s => s.trim());
+  return { city: parts[0] || '', state: parts[1] || '' };
+}
+function parseDateAny(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+function fmtPretty(d) {
+  return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(d);
+}
 
-function mapOne(c) {
-  // Prefer explicit city and state, else derive from location
+/** Map a campaign row to your card shape */
+function mapCampaign(c) {
   const city  = cleanStr(c.city)  || splitLocation(c.location).city;
   const state = cleanStr(c.state) || splitLocation(c.location).state;
-
-  // Prefer explicit combined location if present, else build from city and state
   const location = cleanStr(c.location) || [city, state].filter(Boolean).join(', ');
 
-  // New headers mapping
   return {
     id: cleanStr(c.slug),
     slug: cleanStr(c.slug),
@@ -107,18 +111,42 @@ function mapOne(c) {
     organization: cleanStr(c.org_name) || cleanStr(c.organization),
     status: cleanStr(c.status),
 
-    // Dates: only end_date is guaranteed in the new sheet
     start_date: cleanStr(c.start_date) || '',
     end_date:   cleanStr(c.end_date)   || '',
     created_at: cleanStr(c.created_at) || '',
 
-    // Sort key fallback
     updated_at: cleanStr(c.updated_at) || cleanStr(c.end_date) || cleanStr(c.created_at) || ''
   };
 }
 
-function isPublic(c) {
-  return String(c.status || '').toLowerCase() === 'active';
+/** True for public cards */
+function isPublic(card) {
+  return String(card.status || '').toLowerCase() === 'active';
+}
+
+/** Normalize an update to a simple shape and compute iso and pretty date */
+function mapUpdate(u) {
+  const slug = cleanStr(u.slug);
+  const content = cleanStr(u.content);
+  const rawDate = u.date != null ? u.date : u.updated_at; // allow either
+  const d = parseDateAny(rawDate);
+  const date_iso = d ? d.toISOString() : '';
+  const date_pretty = d ? fmtPretty(d) : cleanStr(rawDate); // fallback to raw if unparseable
+  return { slug, date: date_pretty, date_iso, content };
+}
+
+/** Group updates by slug and sort newest first within each group */
+function groupUpdatesBySlug(updates) {
+  const by = new Map();
+  for (const u of updates) {
+    if (!u.slug) continue;
+    if (!by.has(u.slug)) by.set(u.slug, []);
+    by.get(u.slug).push(u);
+  }
+  for (const arr of by.values()) {
+    arr.sort((a, b) => new Date(b.date_iso || 0) - new Date(a.date_iso || 0));
+  }
+  return by;
 }
 
 function utcStamp() {
@@ -135,19 +163,43 @@ function utcStamp() {
 
 (async function main() {
   try {
-    const text = await fetchText(SOURCE_URL);
-    const root = parsePossiblyQuotedJSON(text);
+    // Fetch both sources
+    const [campaignsText, updatesText] = await Promise.all([
+      fetchText(CAMPAIGNS_URL),
+      fetchText(UPDATES_URL)
+    ]);
+    const campaignsRoot = parsePossiblyQuotedJSON(campaignsText);
+    const updatesRoot   = parsePossiblyQuotedJSON(updatesText);
 
-    // New API returns { front: [...] }. Keep back compat for { campaigns: [...] } or raw array.
-    const campaigns =
-      Array.isArray(root?.front)      ? root.front      :
-      Array.isArray(root?.campaigns)  ? root.campaigns  :
-      Array.isArray(root)             ? root            :
+    // Be flexible about shapes
+    const rawCampaigns =
+      Array.isArray(campaignsRoot?.front)     ? campaignsRoot.front :
+      Array.isArray(campaignsRoot?.campaigns) ? campaignsRoot.campaigns :
+      Array.isArray(campaignsRoot)            ? campaignsRoot :
       [];
 
-    const cards = campaigns.filter(isPublic).map(mapOne);
+    const rawUpdates =
+      Array.isArray(updatesRoot?.updates) ? updatesRoot.updates :
+      Array.isArray(updatesRoot)          ? updatesRoot :
+      [];
 
-    // Sort by updated_at if present, else stable
+    // Normalize
+    const cardsBase = rawCampaigns.map(mapCampaign).filter(isPublic);
+    const updates   = rawUpdates.map(mapUpdate);
+
+    // Group updates and merge into cards
+    const bySlug = groupUpdatesBySlug(updates);
+    const cards = cardsBase.map(card => {
+      const ups = bySlug.get(card.slug) || [];
+      // If we have updates, set updated_at to the newest update iso
+      if (ups.length && ups[0].date_iso) {
+        card.updated_at = ups[0].date_iso;
+      }
+      // Attach updates array with pretty date and iso
+      return { ...card, updates: ups };
+    });
+
+    // Sort cards by updated_at desc
     cards.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
 
     if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -156,7 +208,7 @@ function utcStamp() {
     fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
 
     // Versioned filename: time + content hash
-    const stamp = utcStamp(); // e.g. 202507011122
+    const stamp = utcStamp();
     const hash  = crypto.createHash('sha1').update(JSON.stringify(cards)).digest('hex').slice(0, 8);
     const versionedName = `campaigns.cards.${stamp}.${hash}.min.json`;
     const versionedPath = path.join(OUT_DIR, versionedName);
