@@ -24,6 +24,12 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Ensure repo is up to date
+        run: |
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
       # Optional: clear old versioned folders before writing new ones
       - name: Clean old versioned folders
         run: rm -rf public/campaigns.v-*
@@ -36,18 +42,11 @@ jobs:
           set -e
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/campaigns.cards.min.json \
-                  public/campaigns.cards.*.min.json \
-                  public/cards.latest.json \
-                  public/campaigns.index.min.json \
-                  public/campaigns.home.min.json \
-                  public/campaigns.manifest.json
-          # add new per-slug versioned folders (do not fail if none)
-          git add -A public/campaigns.v-* 2>/dev/null || true
+          # stage all changes under public, including deletions and new versioned folders
+          git add -A public
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update cards feed from Google"
-          git pull --rebase origin main
-          git push
+          git push origin HEAD:main
 
       - name: Purge jsDelivr caches
         run: |
