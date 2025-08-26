@@ -57,35 +57,34 @@ function parsePossiblyQuotedJSON(text) {
   throw new Error('Response was not valid JSON. Preview: ' + t.slice(0, 500));
 }
 
-function numish(v) {
-  if (v == null || v === '') return 0;
-  if (typeof v === 'number') return v;
-  const s = String(v).replace(/[$, ]/g, '');
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
-}
-function cleanStr(v) {
+const cleanStr = v => {
   if (v == null) return '';
   const s = String(v).trim();
   const sl = s.toLowerCase();
   if (sl === 'undefined' || sl === 'null') return '';
   return s;
-}
-function splitLocation(loc) {
+};
+const numish = v => {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number') return v;
+  const s = String(v).replace(/[$, ]/g, '');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
+const splitLocation = loc => {
   if (!loc) return { city: '', state: '' };
   const parts = String(loc).split(',').map(s => s.trim());
   return { city: parts[0] || '', state: parts[1] || '' };
-}
-function parseDateAny(v) {
+};
+const parseDateAny = v => {
   if (!v) return null;
   const d = new Date(v);
   return isNaN(d) ? null : d;
-}
-function fmtPretty(d) {
-  return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(d);
-}
+};
+const fmtPretty = d =>
+  new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(d);
 
-/** Map a campaign row to your card shape */
+/** Map a campaign to the card shape you already use */
 function mapCampaign(c) {
   const city  = cleanStr(c.city)  || splitLocation(c.location).city;
   const state = cleanStr(c.state) || splitLocation(c.location).state;
@@ -119,23 +118,21 @@ function mapCampaign(c) {
   };
 }
 
-/** True for public cards */
 function isPublic(card) {
   return String(card.status || '').toLowerCase() === 'active';
 }
 
-/** Normalize an update to a simple shape and compute iso and pretty date */
+/** Normalize updates and add pretty + iso dates */
 function mapUpdate(u) {
   const slug = cleanStr(u.slug);
   const content = cleanStr(u.content);
-  const rawDate = u.date != null ? u.date : u.updated_at; // allow either
+  const rawDate = u.date != null ? u.date : u.updated_at;
   const d = parseDateAny(rawDate);
   const date_iso = d ? d.toISOString() : '';
-  const date_pretty = d ? fmtPretty(d) : cleanStr(rawDate); // fallback to raw if unparseable
+  const date_pretty = d ? fmtPretty(d) : cleanStr(rawDate);
   return { slug, date: date_pretty, date_iso, content };
 }
 
-/** Group updates by slug and sort newest first within each group */
 function groupUpdatesBySlug(updates) {
   const by = new Map();
   for (const u of updates) {
@@ -163,7 +160,7 @@ function utcStamp() {
 
 (async function main() {
   try {
-    // Fetch both sources
+    // 1) Fetch both sources
     const [campaignsText, updatesText] = await Promise.all([
       fetchText(CAMPAIGNS_URL),
       fetchText(UPDATES_URL)
@@ -171,7 +168,7 @@ function utcStamp() {
     const campaignsRoot = parsePossiblyQuotedJSON(campaignsText);
     const updatesRoot   = parsePossiblyQuotedJSON(updatesText);
 
-    // Be flexible about shapes
+    // 2) Be flexible about shapes
     const rawCampaigns =
       Array.isArray(campaignsRoot?.front)     ? campaignsRoot.front :
       Array.isArray(campaignsRoot?.campaigns) ? campaignsRoot.campaigns :
@@ -183,51 +180,83 @@ function utcStamp() {
       Array.isArray(updatesRoot)          ? updatesRoot :
       [];
 
-    // Normalize
-    const cardsBase = rawCampaigns.map(mapCampaign).filter(isPublic);
+    // 3) Normalize
+    const baseCards = rawCampaigns.map(mapCampaign).filter(isPublic);
     const updates   = rawUpdates.map(mapUpdate);
+    const bySlug    = groupUpdatesBySlug(updates);
 
-    // Group updates and merge into cards
-    const bySlug = groupUpdatesBySlug(updates);
-    const cards = cardsBase.map(card => {
+    // 4) Merge updates into each card, bump updated_at from newest update
+    const cards = baseCards.map(card => {
       const ups = bySlug.get(card.slug) || [];
-      // If we have updates, set updated_at to the newest update iso
-      if (ups.length && ups[0].date_iso) {
-        card.updated_at = ups[0].date_iso;
-      }
-      // Attach updates array with pretty date and iso
+      if (ups.length && ups[0].date_iso) card.updated_at = ups[0].date_iso;
       return { ...card, updates: ups };
     });
 
-    // Sort cards by updated_at desc
+    // 5) Sort cards by updated_at desc
     cards.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
 
+    // 6) Ensure out dir
     if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
-    // Write canonical
+    // 7) Write canonical aggregated file (back compat)
     fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
 
-    // Versioned filename: time + content hash
+    // 8) Versioned aggregated file
     const stamp = utcStamp();
     const hash  = crypto.createHash('sha1').update(JSON.stringify(cards)).digest('hex').slice(0, 8);
     const versionedName = `campaigns.cards.${stamp}.${hash}.min.json`;
     const versionedPath = path.join(OUT_DIR, versionedName);
-
     fs.writeFileSync(versionedPath, JSON.stringify(cards), 'utf8');
 
-    // Manifest that points to the versioned CDN URL
+    // 9) Small index for lists/grids
+    const index = cards.map(c => ({
+      slug: c.slug,
+      title: c.title,
+      img: c.img,
+      goal: c.goal,
+      raised: c.raised,
+      category: c.category,
+      city: c.city,
+      state: c.state,
+      updated_at: c.updated_at
+    }));
+    fs.writeFileSync(path.join(OUT_DIR, 'campaigns.index.min.json'), JSON.stringify(index), 'utf8');
+
+    // 10) Per-slug files in a versioned folder
+    const perSlugDirName = `campaigns.v-${stamp}.${hash}`;
+    const perSlugDir     = path.join(OUT_DIR, perSlugDirName);
+    if (!fs.existsSync(perSlugDir)) fs.mkdirSync(perSlugDir);
+    for (const c of cards) {
+      if (!c.slug) continue;
+      fs.writeFileSync(path.join(perSlugDir, `${c.slug}.json`), JSON.stringify(c), 'utf8');
+    }
+
+    // 11) Manifest that points to the per-slug folder on CDN
     const manifest = {
+      base: CDN_BASE + perSlugDirName + '/', // absolute CDN base for per-slug JSON
+      stamp,
+      hash,
+      count: cards.length,
+      slugs: cards.map(c => c.slug)
+    };
+    fs.writeFileSync(path.join(OUT_DIR, 'campaigns.manifest.json'), JSON.stringify(manifest), 'utf8');
+
+    // 12) Pointer to current versioned aggregated file (unchanged)
+    const latest = {
       url: CDN_BASE + versionedName,
       stamp,
       hash,
       updated_at: new Date().toISOString(),
       count: cards.length
     };
-    fs.writeFileSync(path.join(OUT_DIR, 'cards.latest.json'), JSON.stringify(manifest), 'utf8');
+    fs.writeFileSync(path.join(OUT_DIR, 'cards.latest.json'), JSON.stringify(latest), 'utf8');
 
     console.log('Wrote:');
     console.log('  ', OUT_FILE);
     console.log('  ', versionedPath);
+    console.log('  ', path.join(OUT_DIR, 'campaigns.index.min.json'));
+    console.log('  ', path.join(OUT_DIR, 'campaigns.manifest.json'));
+    console.log('  ', path.join(perSlugDir, '<slug>.json'));
     console.log('  ', path.join(OUT_DIR, 'cards.latest.json'));
   } catch (err) {
     console.error('Build failed:', err.stack || err.message);
