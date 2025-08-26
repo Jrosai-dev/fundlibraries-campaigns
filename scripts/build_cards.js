@@ -230,6 +230,27 @@ function utcStamp() {
       if (!c.slug) continue;
       fs.writeFileSync(path.join(perSlugDir, `${c.slug}.json`), JSON.stringify(c), 'utf8');
     }
+    // 10b) Homepage: top 6 by raised (active only, since cards are active)
+const homeTop = [...cards]
+  .sort((a, b) => (b.raised || 0) - (a.raised || 0))
+  .slice(0, 6)
+  .map(c => ({
+    slug: c.slug,
+    title: c.title,
+    img: c.img,
+    goal: c.goal,
+    raised: c.raised,
+    category: c.category,
+    city: c.city,
+    state: c.state,
+    updated_at: c.updated_at
+  }));
+
+fs.writeFileSync(
+  path.join(OUT_DIR, 'campaigns.home.min.json'),
+  JSON.stringify(homeTop),
+  'utf8'
+);
 
     // 11) Manifest that points to the per-slug folder on CDN
     const manifest = {
