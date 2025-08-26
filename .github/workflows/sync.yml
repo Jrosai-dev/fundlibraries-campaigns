@@ -40,6 +40,7 @@ jobs:
                   public/campaigns.cards.*.min.json \
                   public/cards.latest.json \
                   public/campaigns.index.min.json \
+                  public/campaigns.home.min.json \
                   public/campaigns.manifest.json
           # add new per-slug versioned folders
           git add -A public/campaigns.v-*
@@ -48,21 +49,22 @@ jobs:
           git pull --rebase origin main
           git push
 
-      - name: Purge jsDelivr caches
-        run: |
-          set -e
-          purge() { for i in 1 2 3; do curl -fS "$1" && return 0 || sleep 2; done; return 1; }
-          # Canonical and pointers
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json
-          # New non-versioned files
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.index.min.json
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json
-          # Versioned aggregated file (derive from latest)
-          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
-          PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
-          purge "$PURGE_URL"
-          # Per-slug files live under a new versioned folder each build, so no purge needed
+- name: Purge jsDelivr caches
+  run: |
+    set -e
+    purge() { for i in 1 2 3; do curl -fS "$1" && return 0 || sleep 2; done; return 1; }
+    # Canonical and pointers
+    purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
+    purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json
+    # New non-versioned files
+    purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.index.min.json
+    purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json
+    purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.home.min.json
+    # Versioned aggregated file (derive from latest)
+    VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
+    PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
+    purge "$PURGE_URL"
+    # Per-slug files live under a new versioned folder each build, so no purge needed
 
       - name: Verify versioned file is live on CDN
         run: |
