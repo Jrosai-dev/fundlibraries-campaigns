@@ -9,7 +9,6 @@ permissions:
   contents: write
 
 concurrency:
-  # Unique group per branch to avoid cross‑run cancellations
   group: cards-sync-${{ github.ref }}
   cancel-in-progress: true
 
@@ -34,7 +33,6 @@ jobs:
           git checkout main
           git reset --hard origin/main
 
-      # Optional: clear old versioned folders before writing new ones
       - name: Clean old versioned folders
         run: rm -rf public/campaigns.v-*
 
@@ -61,20 +59,16 @@ jobs:
         if: steps.commit.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          # Purge function retries up to 3 times
           purge() { for i in 1 2 3; do curl -fsS "$1" && return 0 || sleep 2; done; return 1; }
 
-          # Pointers your site uses
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/feeds.latest.json || true
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json || true
 
-          # Legacy non-versioned files (if you still expose them)
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json || true
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.index.min.json || true
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.home.min.json || true
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json || true
 
-          # Versioned aggregated file purge (mostly harmless)
           VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
           PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
           purge "$PURGE_URL" || true
