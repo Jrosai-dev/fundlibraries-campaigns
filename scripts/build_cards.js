@@ -8,12 +8,12 @@ const crypto = require('crypto');
 const REPO_SLUG = 'Jrosai-dev/fundlibraries-campaigns';
 const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${REPO_SLUG}@main/public/`;
 
-/** Your two web apps */
-const CAMPAIGNS_URL = 'https://script.google.com/macros/s/AKfycbyiouHm4YRuReOn73FR_uLr7wJpBTW4QhCaXb9a12x3_wuYMll9FiBPj9lPQcOFhkAfRA/exec';
-const UPDATES_URL   = 'https://script.google.com/macros/s/AKfycbw21MCIKLKDMUZmsDP0AAvnmsGwCN1TYHviqcUmArJDOW8y1LdpMFvFugXY4iWI4nUz4A/exec';
+/** Your two web apps (force bypass of Apps Script cache) */
+const CAMPAIGNS_URL = 'https://script.google.com/macros/s/AKfycbyiouHm4YRuReOn73FR_uLr7wJpBTW4QhCaXb9a12x3_wuYMll9FiBPj9lPQcOFhkAfRA/exec?nocache=1';
+const UPDATES_URL   = 'https://script.google.com/macros/s/AKfycbw21MCIKLKDMUZmsDP0AAvnmsGwCN1TYHviqcUmArJDOW8y1LdpMFvFugXY4iWI4nUz4A/exec?nocache=1';
 
 const OUT_DIR  = path.join(__dirname, '..', 'public');
-const OUT_FILE = path.join(OUT_DIR, 'campaigns.cards.min.json'); // canonical
+const OUT_FILE = path.join(OUT_DIR, 'campaigns.cards.min.json'); // canonical aggregated for back compat
 
 function fetchText(url, redirects = 5) {
   return new Promise((resolve, reject) => {
@@ -84,7 +84,7 @@ const parseDateAny = v => {
 const fmtPretty = d =>
   new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(d);
 
-/** Map a campaign to the card shape you already use */
+/** Map a campaign to your card shape */
 function mapCampaign(c) {
   const city  = cleanStr(c.city)  || splitLocation(c.location).city;
   const state = cleanStr(c.state) || splitLocation(c.location).state;
@@ -168,7 +168,7 @@ function utcStamp() {
     const campaignsRoot = parsePossiblyQuotedJSON(campaignsText);
     const updatesRoot   = parsePossiblyQuotedJSON(updatesText);
 
-    // 2) Be flexible about shapes
+    // 2) Flexible shapes
     const rawCampaigns =
       Array.isArray(campaignsRoot?.front)     ? campaignsRoot.front :
       Array.isArray(campaignsRoot?.campaigns) ? campaignsRoot.campaigns :
@@ -185,7 +185,7 @@ function utcStamp() {
     const updates   = rawUpdates.map(mapUpdate);
     const bySlug    = groupUpdatesBySlug(updates);
 
-    // 4) Merge updates into each card, bump updated_at from newest update
+    // 4) Merge updates, bump updated_at with newest update
     const cards = baseCards.map(card => {
       const ups = bySlug.get(card.slug) || [];
       if (ups.length && ups[0].date_iso) card.updated_at = ups[0].date_iso;
@@ -198,38 +198,10 @@ function utcStamp() {
     // 6) Ensure out dir
     if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
-    // 7) Write canonical aggregated file (back compat)
+    // 7) Canonical aggregated (back compat)
     fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
 
-    // 8) Versioned aggregated file
-    const stamp = utcStamp();
-    const hash  = crypto.createHash('sha1').update(JSON.stringify(cards)).digest('hex').slice(0, 8);
-    const versionedName = `campaigns.cards.${stamp}.${hash}.min.json`;
-    const versionedPath = path.join(OUT_DIR, versionedName);
-    fs.writeFileSync(versionedPath, JSON.stringify(cards), 'utf8');
-    // versioned filenames
-const indexName = `campaigns.index.${stamp}.${hash}.min.json`;
-const homeName  = `campaigns.home.${stamp}.${hash}.min.json`;
-
-// write versioned index and home
-fs.writeFileSync(path.join(OUT_DIR, indexName), JSON.stringify(index), 'utf8');
-fs.writeFileSync(path.join(OUT_DIR, homeName),  JSON.stringify(homeTop), 'utf8');
-
-// optional: still write non-versioned for debugging or external users
-fs.writeFileSync(path.join(OUT_DIR, 'campaigns.index.min.json'), JSON.stringify(index), 'utf8');
-fs.writeFileSync(path.join(OUT_DIR, 'campaigns.home.min.json'),  JSON.stringify(homeTop), 'utf8');
-
-// pointer that pages will read first
-const feeds = {
-  // absolute, versioned URLs only
-  per_slug_base: CDN_BASE + perSlugDirName + '/',        // e.g. .../campaigns.v-20250826.abcd1234/
-  index_url:     CDN_BASE + indexName,                   // e.g. .../campaigns.index.20250826.abcd1234.min.json
-  home_url:      CDN_BASE + homeName,                    // e.g. .../campaigns.home.20250826.abcd1234.min.json
-  cards_url:     CDN_BASE + versionedName                // e.g. .../campaigns.cards.20250826.abcd1234.min.json
-};
-fs.writeFileSync(path.join(OUT_DIR, 'feeds.latest.json'), JSON.stringify(feeds), 'utf8');
-
-    // 9) Small index for lists/grids
+    // 8) Build small index and homepage lists from cards
     const index = cards.map(c => ({
       slug: c.slug,
       title: c.title,
@@ -241,9 +213,40 @@ fs.writeFileSync(path.join(OUT_DIR, 'feeds.latest.json'), JSON.stringify(feeds),
       state: c.state,
       updated_at: c.updated_at
     }));
-    fs.writeFileSync(path.join(OUT_DIR, 'campaigns.index.min.json'), JSON.stringify(index), 'utf8');
 
-    // 10) Per-slug files in a versioned folder
+    const homeTop = [...cards]
+      .sort((a, b) => (b.raised || 0) - (a.raised || 0))
+      .slice(0, 6)
+      .map(c => ({
+        slug: c.slug,
+        title: c.title,
+        img: c.img,
+        goal: c.goal,
+        raised: c.raised,
+        category: c.category,
+        city: c.city,
+        state: c.state,
+        updated_at: c.updated_at
+      }));
+
+    // 9) Versioned names
+    const stamp = utcStamp();
+    const hash  = crypto.createHash('sha1').update(JSON.stringify(cards)).digest('hex').slice(0, 8);
+
+    const cardsName = `campaigns.cards.${stamp}.${hash}.min.json`;
+    const indexName = `campaigns.index.${stamp}.${hash}.min.json`;
+    const homeName  = `campaigns.home.${stamp}.${hash}.min.json`;
+
+    // 10) Write versioned aggregated, index, home
+    fs.writeFileSync(path.join(OUT_DIR, cardsName), JSON.stringify(cards), 'utf8');
+    fs.writeFileSync(path.join(OUT_DIR, indexName), JSON.stringify(index), 'utf8');
+    fs.writeFileSync(path.join(OUT_DIR, homeName),  JSON.stringify(homeTop), 'utf8');
+
+    // Optional non-versioned copies for people hitting them directly
+    fs.writeFileSync(path.join(OUT_DIR, 'campaigns.index.min.json'), JSON.stringify(index), 'utf8');
+    fs.writeFileSync(path.join(OUT_DIR, 'campaigns.home.min.json'),  JSON.stringify(homeTop), 'utf8');
+
+    // 11) Per-slug files in a versioned folder
     const perSlugDirName = `campaigns.v-${stamp}.${hash}`;
     const perSlugDir     = path.join(OUT_DIR, perSlugDirName);
     if (!fs.existsSync(perSlugDir)) fs.mkdirSync(perSlugDir);
@@ -251,31 +254,10 @@ fs.writeFileSync(path.join(OUT_DIR, 'feeds.latest.json'), JSON.stringify(feeds),
       if (!c.slug) continue;
       fs.writeFileSync(path.join(perSlugDir, `${c.slug}.json`), JSON.stringify(c), 'utf8');
     }
-    // 10b) Homepage: top 6 by raised (active only, since cards are active)
-const homeTop = [...cards]
-  .sort((a, b) => (b.raised || 0) - (a.raised || 0))
-  .slice(0, 6)
-  .map(c => ({
-    slug: c.slug,
-    title: c.title,
-    img: c.img,
-    goal: c.goal,
-    raised: c.raised,
-    category: c.category,
-    city: c.city,
-    state: c.state,
-    updated_at: c.updated_at
-  }));
 
-fs.writeFileSync(
-  path.join(OUT_DIR, 'campaigns.home.min.json'),
-  JSON.stringify(homeTop),
-  'utf8'
-);
-
-    // 11) Manifest that points to the per-slug folder on CDN
+    // 12) Manifest for back compat
     const manifest = {
-      base: CDN_BASE + perSlugDirName + '/', // absolute CDN base for per-slug JSON
+      base: CDN_BASE + perSlugDirName + '/',
       stamp,
       hash,
       count: cards.length,
@@ -283,9 +265,9 @@ fs.writeFileSync(
     };
     fs.writeFileSync(path.join(OUT_DIR, 'campaigns.manifest.json'), JSON.stringify(manifest), 'utf8');
 
-    // 12) Pointer to current versioned aggregated file (unchanged)
+    // 13) Pointer to current versioned aggregated file
     const latest = {
-      url: CDN_BASE + versionedName,
+      url: CDN_BASE + cardsName,
       stamp,
       hash,
       updated_at: new Date().toISOString(),
@@ -293,13 +275,24 @@ fs.writeFileSync(
     };
     fs.writeFileSync(path.join(OUT_DIR, 'cards.latest.json'), JSON.stringify(latest), 'utf8');
 
+    // 14) Single pointer with only versioned URLs that pages should read first
+    const feeds = {
+      per_slug_base: CDN_BASE + perSlugDirName + '/',
+      index_url:     CDN_BASE + indexName,
+      home_url:      CDN_BASE + homeName,
+      cards_url:     CDN_BASE + cardsName
+    };
+    fs.writeFileSync(path.join(OUT_DIR, 'feeds.latest.json'), JSON.stringify(feeds), 'utf8');
+
     console.log('Wrote:');
-    console.log('  ', OUT_FILE);
-    console.log('  ', versionedPath);
-    console.log('  ', path.join(OUT_DIR, 'campaigns.index.min.json'));
-    console.log('  ', path.join(OUT_DIR, 'campaigns.manifest.json'));
-    console.log('  ', path.join(perSlugDir, '<slug>.json'));
-    console.log('  ', path.join(OUT_DIR, 'cards.latest.json'));
+    console.log('  canonical:', OUT_FILE);
+    console.log('  versioned:', path.join(OUT_DIR, cardsName));
+    console.log('  index:',     path.join(OUT_DIR, indexName));
+    console.log('  home:',      path.join(OUT_DIR, homeName));
+    console.log('  per-slug:',  path.join(perSlugDir, '<slug>.json'));
+    console.log('  manifest:',  path.join(OUT_DIR, 'campaigns.manifest.json'));
+    console.log('  cards ptr:', path.join(OUT_DIR, 'cards.latest.json'));
+    console.log('  feeds ptr:', path.join(OUT_DIR, 'feeds.latest.json'));
   } catch (err) {
     console.error('Build failed:', err.stack || err.message);
     process.exit(1);
