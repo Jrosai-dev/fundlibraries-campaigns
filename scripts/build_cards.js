@@ -207,6 +207,27 @@ function utcStamp() {
     const versionedName = `campaigns.cards.${stamp}.${hash}.min.json`;
     const versionedPath = path.join(OUT_DIR, versionedName);
     fs.writeFileSync(versionedPath, JSON.stringify(cards), 'utf8');
+    // versioned filenames
+const indexName = `campaigns.index.${stamp}.${hash}.min.json`;
+const homeName  = `campaigns.home.${stamp}.${hash}.min.json`;
+
+// write versioned index and home
+fs.writeFileSync(path.join(OUT_DIR, indexName), JSON.stringify(index), 'utf8');
+fs.writeFileSync(path.join(OUT_DIR, homeName),  JSON.stringify(homeTop), 'utf8');
+
+// optional: still write non-versioned for debugging or external users
+fs.writeFileSync(path.join(OUT_DIR, 'campaigns.index.min.json'), JSON.stringify(index), 'utf8');
+fs.writeFileSync(path.join(OUT_DIR, 'campaigns.home.min.json'),  JSON.stringify(homeTop), 'utf8');
+
+// pointer that pages will read first
+const feeds = {
+  // absolute, versioned URLs only
+  per_slug_base: CDN_BASE + perSlugDirName + '/',        // e.g. .../campaigns.v-20250826.abcd1234/
+  index_url:     CDN_BASE + indexName,                   // e.g. .../campaigns.index.20250826.abcd1234.min.json
+  home_url:      CDN_BASE + homeName,                    // e.g. .../campaigns.home.20250826.abcd1234.min.json
+  cards_url:     CDN_BASE + versionedName                // e.g. .../campaigns.cards.20250826.abcd1234.min.json
+};
+fs.writeFileSync(path.join(OUT_DIR, 'feeds.latest.json'), JSON.stringify(feeds), 'utf8');
 
     // 9) Small index for lists/grids
     const index = cards.map(c => ({
