@@ -201,33 +201,35 @@ function utcStamp() {
     // 7) Canonical aggregated (back compat)
     fs.writeFileSync(OUT_FILE, JSON.stringify(cards), 'utf8');
 
-    // 8) Build small index and homepage lists from cards
-    const index = cards.map(c => ({
-      slug: c.slug,
-      title: c.title,
-      img: c.img,
-      goal: c.goal,
-      raised: c.raised,
-      category: c.category,
-      city: c.city,
-      state: c.state,
-      updated_at: c.updated_at
-    }));
+   // 8) Build small index and homepage lists from cards
+const index = cards.map(c => ({
+  slug: c.slug,
+  title: c.title,
+  img: c.img,
+  goal: c.goal,
+  raised: c.raised,
+  category: c.category,
+  city: c.city,
+  state: c.state,
+  updated_at: c.updated_at
+}));
 
-    const homeTop = [...cards]
-      .sort((a, b) => (b.raised || 0) - (a.raised || 0))
-      .slice(0, 6)
-      .map(c => ({
-        slug: c.slug,
-        title: c.title,
-        img: c.img,
-        goal: c.goal,
-        raised: c.raised,
-        category: c.category,
-        city: c.city,
-        state: c.state,
-        updated_at: c.updated_at
-      }));
+const homeTop = [...cards]
+  .sort((a, b) => (b.raised || 0) - (a.raised || 0))
+  .slice(0, 6)
+  .map(c => ({
+    slug: c.slug,
+    title: c.title,
+    short: c.short || '',            // NEW
+    organization: c.organization || '', // NEW
+    img: c.img,
+    goal: c.goal,
+    raised: c.raised,
+    category: c.category,
+    city: c.city,
+    state: c.state,
+    updated_at: c.updated_at
+  }));
 
     // 9) Versioned names
     const stamp = utcStamp();
