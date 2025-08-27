@@ -34,7 +34,7 @@ jobs:
       - name: Clean old versioned folders
         run: rm -rf public/campaigns.v-*
 
-      - name: Build cards (canonical + versioned + index + per-slug + manifest + home)
+      - name: Build cards (canonical + versioned + index + per-slug + manifest + home + feeds pointer)
         run: node scripts/build_cards.js
 
       - name: Commit generated files
@@ -52,47 +52,78 @@ jobs:
         run: |
           set -e
           purge() { for i in 1 2 3; do curl -fS "$1" && return 0 || sleep 2; done; return 1; }
-          # Canonical and pointers
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
+          # Pointers we actually read in the browser
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/feeds.latest.json
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json
-          # New non-versioned files
+          # Legacy non-versioned files (safe to purge if you still publish them)
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.index.min.json
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json
           purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.home.min.json
-          # Versioned aggregated file (derive from latest)
+          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json
+          # Versioned aggregated file does not need purge, but we derive its purge URL from the pointer for completeness
           VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
           PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
           purge "$PURGE_URL"
-          # Per-slug files are versioned folders, no purge needed
+          # Per-slug files are in a new versioned folder each build, no purge needed
 
-      - name: Verify versioned file is live on CDN
+      - name: Verify feeds pointer is live
         run: |
           set -e
-          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
-          echo "Waiting for CDN to serve: $VERSIONED_URL"
+          WANT_PER=$(node -e "console.log(JSON.parse(require('fs').readFileSync('./public/feeds.latest.json','utf8')).per_slug_base)")
+          WANT_INDEX=$(node -e "console.log(JSON.parse(require('fs').readFileSync('./public/feeds.latest.json','utf8')).index_url)")
+          WANT_HOME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('./public/feeds.latest.json','utf8')).home_url)")
+          FEEDS_URL="https://cdn.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/feeds.latest.json?v=$(date +%s)"
+          echo "Waiting for feeds pointer: $FEEDS_URL"
           for i in $(seq 1 90); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$VERSIONED_URL")
-            if [ "$code" = "200" ]; then
-              echo "Versioned JSON is live on jsDelivr."
-              exit 0
+            GOT_PER=$(curl -fsSL "$FEEDS_URL" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const j=JSON.parse(d);console.log(j.per_slug_base||'')}catch(e){console.log('')}})")
+            GOT_INDEX=$(curl -fsSL "$FEEDS_URL" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const j=JSON.parse(d);console.log(j.index_url||'')}catch(e){console.log('')}})")
+            GOT_HOME=$(curl -fsSL "$FEEDS_URL" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const j=JSON.parse(d);console.log(j.home_url||'')}catch(e){console.log('')}})")
+            if [ "$GOT_PER" = "$WANT_PER" ] && [ "$GOT_INDEX" = "$WANT_INDEX" ] && [ "$GOT_HOME" = "$WANT_HOME" ]; then
+              echo "feeds.latest.json is live."
+              break
             fi
             sleep 5
           done
-          echo "File not live after retries."
-          exit 1
+
+      - name: Verify versioned files are live on CDN
+        run: |
+          set -e
+          # Check aggregated versioned file
+          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
+          echo "Waiting for: $VERSIONED_URL"
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$VERSIONED_URL")
+            [ "$code" = "200" ] && { echo "Aggregated file live."; break; }
+            sleep 5
+          done
+          # Check versioned index and home via feeds pointer
+          INDEX_URL=$(node -e "console.log(JSON.parse(require('fs').readFileSync('./public/feeds.latest.json','utf8')).index_url)")
+          HOME_URL=$(node -e "console.log(JSON.parse(require('fs').readFileSync('./public/feeds.latest.json','utf8')).home_url)")
+          echo "Waiting for: $INDEX_URL"
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$INDEX_URL")
+            [ "$code" = "200" ] && { echo "Index file live."; break; }
+            sleep 5
+          done
+          echo "Waiting for: $HOME_URL"
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$HOME_URL")
+            [ "$code" = "200" ] && { echo "Home file live."; break; }
+            sleep 5
+          done
 
       - name: Check latest pointer (non-fatal)
         continue-on-error: true
         run: |
           set -e
           LATEST_URL="https://cdn.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json?v=$(date +%s)"
-          echo "Checking latest pointer: $LATEST_URL"
+          echo "Checking cards.latest.json: $LATEST_URL"
           for i in $(seq 1 60); do
             code=$(curl -s -o latest.json -w "%{http_code}" "$LATEST_URL")
             if [ "$code" = "200" ] && grep -q '"url":' latest.json; then
-              echo "Latest pointer is visible."
+              echo "cards.latest.json pointer is visible."
               exit 0
             fi
             sleep 5
           done
-          echo "Latest pointer still stale. Continuing."
+          echo "cards.latest.json still stale. Continuing."
