@@ -4,10 +4,6 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 
-/** EDIT if you ever change repo */
-const REPO_SLUG = 'Jrosai-dev/fundlibraries-campaigns';
-const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${REPO_SLUG}@main/public/`;
-
 /** Your two web apps (force bypass of Apps Script cache) */
 const CAMPAIGNS_URL = 'https://script.google.com/macros/s/AKfycbyiouHm4YRuReOn73FR_uLr7wJpBTW4QhCaXb9a12x3_wuYMll9FiBPj9lPQcOFhkAfRA/exec?nocache=1';
 const UPDATES_URL   = 'https://script.google.com/macros/s/AKfycbw21MCIKLKDMUZmsDP0AAvnmsGwCN1TYHviqcUmArJDOW8y1LdpMFvFugXY4iWI4nUz4A/exec?nocache=1';
@@ -233,7 +229,7 @@ function utcStamp() {
       slug: c.slug,
       title: c.title,
       short: c.short || '',
-      description: c.description || '', // include for explore
+      description: c.description || '',
       organization: c.organization || '',
       img: c.img,
       goal: c.goal,
@@ -273,26 +269,22 @@ function utcStamp() {
     fs.writeFileSync(path.join(OUT_DIR, indexName), JSON.stringify(index), 'utf8');
     fs.writeFileSync(path.join(OUT_DIR, homeName), JSON.stringify(homeTop), 'utf8');
 
-    // Optional non-versioned for fallback/testing
+    // Optional non versioned for fallback or legacy consumers
     fs.writeFileSync(path.join(OUT_DIR, 'campaigns.index.min.json'), JSON.stringify(index), 'utf8');
     fs.writeFileSync(path.join(OUT_DIR, 'campaigns.home.min.json'), JSON.stringify(homeTop), 'utf8');
 
-    // 11) Per-slug files in a versioned folder
+    // 11) Per slug files in a versioned folder
     const perSlugDirName = `campaigns.v-${stamp}.${hash}`;
     const perSlugDir = path.join(OUT_DIR, perSlugDirName);
     if (!fs.existsSync(perSlugDir)) fs.mkdirSync(perSlugDir);
     for (const c of cards) {
       if (!c.slug) continue;
-      fs.writeFileSync(
-        path.join(perSlugDir, `${c.slug}.json`),
-        JSON.stringify(c),
-        'utf8'
-      );
+      fs.writeFileSync(path.join(perSlugDir, `${c.slug}.json`), JSON.stringify(c), 'utf8');
     }
 
-    // 12) Manifest for back compat
+    // 12) Manifest for back compat — relative only
     const manifest = {
-      base: CDN_BASE + perSlugDirName + '/',
+      base_path: `${perSlugDirName}/`,
       stamp,
       hash,
       count: cards.length,
@@ -300,9 +292,9 @@ function utcStamp() {
     };
     fs.writeFileSync(path.join(OUT_DIR, 'campaigns.manifest.json'), JSON.stringify(manifest), 'utf8');
 
-    // 13) cards.latest.json pointer
+    // 13) cards.latest.json pointer — relative only
     const latest = {
-      url: CDN_BASE + cardsName,
+      url_path: cardsName,
       stamp,
       hash,
       updated_at: new Date().toISOString(),
@@ -310,12 +302,12 @@ function utcStamp() {
     };
     fs.writeFileSync(path.join(OUT_DIR, 'cards.latest.json'), JSON.stringify(latest), 'utf8');
 
-    // 14) feeds.latest.json pointer (primary)
+    // 14) feeds.latest.json pointer — relative only
     const feeds = {
-      per_slug_base: CDN_BASE + perSlugDirName + '/',
-      index_url: CDN_BASE + indexName,
-      home_url: CDN_BASE + homeName,
-      cards_url: CDN_BASE + cardsName,
+      per_slug_base: `${perSlugDirName}/`,
+      index_path: indexName,
+      home_path: homeName,
+      cards_path: cardsName,
     };
     fs.writeFileSync(path.join(OUT_DIR, 'feeds.latest.json'), JSON.stringify(feeds), 'utf8');
 
