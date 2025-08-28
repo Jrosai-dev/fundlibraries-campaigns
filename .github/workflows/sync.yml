@@ -12,6 +12,10 @@ concurrency:
   group: cards-sync-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  REPO_SLUG: Jrosai-dev/fundlibraries-campaigns
+  AUTO_MOVE_LATEST: "false"  # set to "true" if you want the 'latest' tag to auto-advance
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,8 +40,21 @@ jobs:
       - name: Clean old versioned folders
         run: rm -rf public/campaigns.v-*
 
-      - name: Build cards (canonical + versioned + index + per‑slug + manifest + home + feeds pointer)
+      - name: Build cards (canonical + versioned + index + per-slug + manifest + home + feeds pointers)
         run: node scripts/build_cards.js
+
+      # Guardrails: forbid publishing @main or absolute self jsDelivr URLs in public/*.json
+      - name: Guard — no @main or absolute self URLs in public
+        run: |
+          set -euo pipefail
+          if grep -R "@main" public; then
+            echo "Found @main in public outputs"
+            exit 1
+          fi
+          if grep -R "cdn.jsdelivr.net/gh/${REPO_SLUG}@" public; then
+            echo "Found absolute jsDelivr URLs pointing to this repo in public outputs"
+            exit 1
+          fi
 
       - name: Commit generated files
         id: commit
@@ -55,23 +72,45 @@ jobs:
           git push origin HEAD:main
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Purge jsDelivr caches
+      # Legacy cache purges for consumers still reading @main
+      - name: Purge jsDelivr caches (@main legacy)
         if: steps.commit.outputs.changed == 'true'
         run: |
           set -euo pipefail
           purge() { for i in 1 2 3; do curl -fsS "$1" && return 0 || sleep 2; done; return 1; }
 
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/feeds.latest.json || true
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/cards.latest.json || true
+          purge https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/feeds.latest.json || true
+          purge https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/cards.latest.json || true
 
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.cards.min.json || true
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.index.min.json || true
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.home.min.json || true
-          purge https://purge.jsdelivr.net/gh/Jrosai-dev/fundlibraries-campaigns@main/public/campaigns.manifest.json || true
+          purge https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/campaigns.cards.min.json || true
+          purge https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/campaigns.index.min.json || true
+          purge https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/campaigns.home.min.json || true
+          purge https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/campaigns.manifest.json || true
 
-          VERSIONED_URL=$(node -e "console.log(require('./public/cards.latest.json').url)")
-          PURGE_URL="${VERSIONED_URL/cdn.jsdelivr.net\/gh/purge.jsdelivr.net\/gh}"
-          purge "$PURGE_URL" || true
+          # If url_path exists, purge its @main location too (optional convenience)
+          FILE_PATH=$(node -e "try{process.stdout.write((require('./public/cards.latest.json').url_path)||'')}catch(e){process.stdout.write('')}")
+          if [ -n "$FILE_PATH" ]; then
+            purge "https://purge.jsdelivr.net/gh/${REPO_SLUG}@main/public/$FILE_PATH" || true
+          fi
+
+      # Create a timestamped tag for this build (immutable)
+      - name: Create and push timestamp tag
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          TAG="v$(date -u +'%Y-%m-%d-%H%M')"
+          echo "Tagging commit as $TAG"
+          git tag -a "$TAG" -m "Automated build at $(date -u)"
+          git push origin "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Optionally move 'latest' tag to this commit (auto-rollout)
+      - name: Move latest tag (optional)
+        if: steps.commit.outputs.changed == 'true' && env.AUTO_MOVE_LATEST == 'true'
+        run: |
+          set -euo pipefail
+          git tag -f latest
+          git push origin latest --force
 
       - name: Done
-        run: echo "Sync finished. CDN verification is disabled due to environment restrictions."
+        run: echo "Sync finished."
