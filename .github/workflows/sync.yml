@@ -14,7 +14,7 @@ concurrency:
 
 env:
   REPO_SLUG: Jrosai-dev/fundlibraries-campaigns
-  AUTO_MOVE_LATEST: "false"  # set to "true" if you want the 'latest' tag to auto-advance
+  AUTO_MOVE_LATEST: "true" 
 
 jobs:
   build:
